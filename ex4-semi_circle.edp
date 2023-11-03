@@ -1,0 +1,227 @@
+//  run with MPI:  mpiexec.exe -np 4 FreeFem++-mpi ex4-semi_circle.edp -wg
+// NBPROC 4
+
+load "PETSc-complex"
+load "iovtk"
+macro dimension()2//
+include "macro_ddm.idp"
+
+macro def(i)[i, i#B, i#C]//
+macro init(i)[i, i, i]//
+func Pk = [P2, P2, P1];
+macro grad(u)[dx(u), dy(u)]//
+macro div(u)(dx(u#1) + dy(u#2))//
+macro UgradV(u, v)[[u#1, u#2]' * [dx(v#1), dy(v#1)],
+                   [u#1, u#2]' * [dx(v#2), dy(v#2)]]//
+
+real nu = 1.5e-5;
+
+real diameter = 430.e-6;
+real pDiameter = 100.e-6;
+
+border b0(t = 0 , 0.01) { x = t ; y = 5*0.15*(0.2969*sqrt(t)-0.1260*t-0.3516*pow(t, 2)+0.2843*pow(t, 3)-0.1036*pow(t, 4)); label = 5;};
+border b2(t = 0.01 , 1) { x = t ; y = 5*0.15*(0.2969*sqrt(t)-0.1260*t-0.3516*pow(t, 2)+0.2843*pow(t, 3)-0.1036*pow(t, 4)); label = 5;};
+border b1(t=1 , 0.01) {x = t ; y = -5*0.15*(0.2969*sqrt(t)-0.1260*t-0.3516*pow(t, 2)+0.2843*pow(t, 3)-0.1036*pow(t, 4)); label = 5;}
+border b3(t=0.01, 0.0) {x = t ; y = -5*0.15*(0.2969*sqrt(t)-0.1260*t-0.3516*pow(t, 2)+0.2843*pow(t, 3)-0.1036*pow(t, 4)); label = 5;}
+border a0(t = 0 , 1) { x = -0.1 + 1.2 * t ; y = -5*0.15*(0.2969*sqrt(t)-0.1260*t-0.3516*pow(t, 2)+0.2843*pow(t, 3)-0.1036*pow(t, 4)) -0.2; label=1;};
+border a1(t=0., 1.){x=1.1; y=t*0.4 - 0.2; label=2;};
+border a2(t=1., 0.) {x = -0.1 + 1.2 * t ; y = 5*0.15*(0.2969*sqrt(t)-0.1260*t-0.3516*pow(t, 2)+0.2843*pow(t, 3)-0.1036*pow(t, 4)) +0.2; label = 3;}
+border a3(t=1., 0.){x=-0.1; y=t*0.4 - 0.2; label=4;};
+int n = 20;
+mesh Th = buildmesh(a0(20 * n) + a1(10 * n)+ a2(20 * n)+ a3(10 * n) + (b0(5 * n) + b2(30 * n) + b1(30 * n) + b3(5 * n)));
+fespace Vh(Th, P1);
+// Function
+
+
+//plot(Th, wait = 1);
+
+fespace Wh(Th, [P2, P2, P1]);
+cout<< "Number of degree of freedom = " << Wh.ndof << endl;
+fespace SpaceP2(Th, P2);
+cout<< "Number of degree of freedom = " << SpaceP2.ndof << endl;
+fespace SpaceP1(Th, P1);
+cout<< "Number of degree of freedom = " << SpaceP1.ndof << endl;
+
+Wh [uc1, uc2, pc];
+SpaceP2 X = x;
+SpaceP2 Y = y;
+
+int[int] ffordervel=[0];	// used to save results in vtk format
+/*
+{
+  ofstream file("x.txt");
+  for (int j = 0; j < SpaceP2.ndof; j++)
+    file << X[][j] << endl;
+}
+
+{
+  ofstream file("y.txt");
+  for (int j = 0; j < SpaceP2.ndof; j++)
+    file << Y[][j] << endl;
+}
+*/
+
+SpaceP2 W1 = 0;
+SpaceP2 nutlist = 0;
+
+{
+    for (int j = 0; j < SpaceP2.ndof; j++)
+        if (Y[][j] >= 0 && X[][j] >=0.15 &&  X[][j] <=0.8)
+            W1[][j] = 1;
+        else
+            W1[][j] = 0;
+}
+
+{
+    ifstream fileRead("U.txt");
+
+    for (int j = 0; j < SpaceP2.ndof; j++)
+      fileRead >> X[][j];
+}
+
+{
+    ifstream fileRead("V.txt");
+
+    for (int j = 0; j < SpaceP2.ndof; j++)
+      fileRead >> Y[][j];
+}
+
+/*
+{
+    ifstream fileRead("nut.txt");
+
+    for (int j = 0; j < SpaceP2.ndof; j++)
+      fileRead >> nutlist[][j];
+}
+*/
+
+Wh [wu1, nut, wu3] = [W1, nu, W1];
+
+
+[uc1, uc2, pc] = [X, Y, 0];
+// plot(uc1, fill=true, value=true, wait = 1);
+// savevtk("u.vtu", Th, [uc1, uc2, pc], dataname="u", order=ffordervel);
+
+Mat<complex> J;
+MatCreate(Th, J, Pk);
+Wh [u1, u2, p];
+Wh [v1, v2, q];
+real frq = 22.7;
+
+complex omega = 1i * 2 * pi * frq;
+varf vJ([u1, u2, p], [v1, v2, q]) = int2d(Th)(
+      (UgradV(uc, u) + UgradV(u, uc))' * [v1, v2]
+    + nut * (grad(u1)' * grad(v1) +
+            grad(u2)' * grad(v2))
+    - p * div(v)
+    - div(u) * q
+     - omega * u1 * v1 - omega * u2 * v2)
+    + on(1, 3, 4, 5, u1 = 0, u2 = 0);
+{
+    matrix<complex> Loc = vJ(Wh, Wh);
+    J = Loc;
+}
+
+varf vM([u1, u2, p], [v1, v2, q]) = int2d(Th)(
+       (u1 * v1 + u2 * v2) * wu1);
+
+matrix<complex> Loc = vM(Wh, Wh);
+Mat<complex> M(J, Loc, clean = true);
+
+varf vJ2([u1, u2, p], [v1, v2, q]) = int2d(Th)(
+      (UgradV(uc, u) + UgradV(u, uc))' * [v1, v2]
+    + nut * (grad(u1)' * grad(v1) +
+            grad(u2)' * grad(v2))
+    - p * div(v)
+    - div(u) * q
+    + omega * u1 * v1 + omega * u2 * v2)
+    + on(1, 3, 4, 5, u1 = 0, u2 = 0);
+
+matrix<complex> Loc2 = vJ2(Wh, Wh);
+Mat<complex> J2(J, Loc2, clean = true);
+
+varf vM2([u1, u2, p], [v1, v2, q]) = int2d(Th)(
+       (u1 * v1 + u2 * v2));
+
+matrix<complex> Loc3 = vM2(Wh, Wh);
+Mat<complex> M2(J, Loc3, clean = true);
+
+set(J, sparams = "-ksp_type preonly -pc_type lu -eps 1.0e-13");
+set(J2, sparams = "-ksp_type preonly -pc_type lu -eps 1.0e-13");
+
+func complex[int] Lop(complex[int]& up) {
+    complex[int] u;
+    //u = up;
+    // MatMult(M2, up, u);
+    KSPSolve(J, up, u);
+    MatMult(M, u, up);
+    KSPSolveTranspose(J2, up, u);
+    MatMult(M2, u, up);
+    return u;
+}
+
+Mat<complex> L(J, Lop); // J is a Mat<complex>, Lop is a func
+int nev = 1;
+complex[int]     val(nev);      // array to store eigenvalues
+Wh<complex>[int] def(vec)(nev); // array to store eigenvectors
+
+string EPSparams = " -eps_nev " + nev + " " +
+                   " -eps_type krylovschur " +
+                   " -eps_largest_magnitude " +
+                   " -st_pc_type none ";
+
+int k = EPSSolve(L, vectors = vec, values  = val, sparams = EPSparams);
+
+fespace Zh(Th, [P2, P2]);
+Zh [onlyU, onlyV] = [real(vec[0]), real(vecB[0])];
+macro def2(i)[i, i#B]//
+macro params()cmm = "Global solution"// EOM
+// plotMPI(Th, [onlyU, onlyV], P2, def2, real, params);
+cout << "MPI rank = " << val << endl;
+string name = "forcing" + frq*10;
+savevtk(name,Th,[onlyU,onlyV,0],order=ffordervel,dataname="Velocity");
+
+macro ThRefinementFactor()1//
+// MatCreate(Th, A, Pk);
+// Wh<complex> [fU, fV, fP] =  [vec[0], vecB[0], vecC[0]];
+complex[int, int] rhs(Wh.ndof, 1), sol(Wh.ndof, 1);
+varf vRhs([u1, u2, p], [v1, v2, q]) = int2d(Th)(vec[0] * v1 + vecB[0] * v2);
+rhs(:, 0) = vRhs(0, Wh);
+complex[int, int] B(J.n, rhs.m), X0(J.n, rhs.m);
+ChangeNumbering(J, rhs, B);
+set(J, sparams = "-ksp_type preonly -pc_type lu -eps 1.0e-13");
+KSPSolve(J, B, X0);
+ChangeNumbering(J, sol, X0, inverse = true, exchange = true);
+Wh [ur, vr, pr];
+ur[] = sol(:, 0).re;
+ffordervel=[0];
+name = "response" + frq*10;
+savevtk(name,Th,[ur, vr, 0],order=ffordervel,dataname="Velocity");
+
+Wh [ur0, vr0, pr0];
+ur0[] = sol(:, 0).im;
+
+{
+    ifstream filecx("cx.txt");
+    ifstream filecy("cy.txt");
+    ofstream fileox("ox.txt");
+    ofstream fileoy("oy.txt");
+
+    real cx;
+    real cy;
+
+    try{
+    for (int j = 0; j < 2500; j++)
+    {
+      cout << j << endl;
+      filecx >> cx;
+      filecy >> cy;
+      fileox << ur0(cx, cy) * 1i + ur(cx, cy) << endl;
+      fileoy << vr0(cx, cy) * 1i + vr(cx, cy) << endl;
+    }
+    }
+    catch(...) { //catch all error
+        cout << " Catch cholesky PB " << endl;
+    }
+}
+
